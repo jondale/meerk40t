@@ -395,6 +395,8 @@ class SVGWriter:
             group_element = SubElement(xml_tree, SVG_TAG_GROUP)
             if hasattr(c, "label") and c.label is not None and c.label != "":
                 group_element.set("inkscape:label", str(c.label))
+            if hasattr(c, "label_display") and c.label_display is not None:
+                group_element.set("label_display", str(c.label_display))
             SVGWriter._write_elements(group_element, c, version)
             return
         elif c.type.startswith("effect"):
@@ -693,6 +695,15 @@ class SVGProcessor:
         @param pathname:
         @return:
         """
+        # Caveat: we will not delete operations that have already a content,
+        # otherwise existing elements that had been classified before
+        # will become orphaned!
+        # When is this needed: not on a load with an empty set but when
+        # you load elements on top of an existing set!
+        retain_op_list = list()
+        for child in list(self.elements.ops()):
+            if child._children is not None and len(child._children) > 0:
+                retain_op_list.append(child)
         self.pathname = pathname
 
         context_node = self.elements.elem_branch
@@ -702,7 +713,10 @@ class SVGProcessor:
         self.parse(svg, file_node, self.element_list, branch="elements")
 
         if self.load_operations and self.operations_replaced:
+            # print ("Will replace all operations...")
             for child in list(self.elements.op_branch.children):
+                if child in retain_op_list:
+                    continue
                 if not hasattr(child, "_ref_load"):
                     child.remove_all_children(fast=True, destroy=True)
                     child.remove_node(fast=True, destroy=True)
@@ -755,6 +769,18 @@ class SVGProcessor:
                             setattr(node, prop, value)
                         except (ValueError, SyntaxError):
                             pass
+
+    def check_for_label_display(self, node, element):
+        """
+        Called for all nodes to check whether the label_display needs to be set
+        @param node:
+        @param element:
+        @return:
+        """
+        lc = element.values.get("label_display")
+        if lc is not None and hasattr(node, "label_display"):
+            d_val = bool(ast.literal_eval(lc))
+            node.label_display = d_val
 
     def check_for_fill_attributes(self, node, element):
         """
@@ -905,6 +931,7 @@ class SVGProcessor:
             label=label,
             settings=element.values,
         )
+        self.check_for_label_display(node, element)
         e_list.append(node)
 
     def _parse_path(self, element, ident, label, lock, context_node, e_list):
@@ -940,6 +967,7 @@ class SVGProcessor:
         node = context_node.add(
             path=element, type="elem path", id=ident, label=label, lock=lock
         )
+        self.check_for_label_display(node, element)
         self.check_for_line_attributes(node, element)
         self.check_for_fill_attributes(node, element)
         self.check_for_mk_path_attributes(node, element)
@@ -966,6 +994,7 @@ class SVGProcessor:
             label=label,
             lock=lock,
         )
+        self.check_for_label_display(node, element)
         self.check_for_line_attributes(node, element)
         self.check_for_fill_attributes(node, element)
         self.check_for_mk_path_attributes(node, element)
@@ -1013,6 +1042,7 @@ class SVGProcessor:
             label=label,
             lock=lock,
         )
+        self.check_for_label_display(node, element)
         e_list.append(node)
 
     def _parse_rect(self, element, ident, label, lock, context_node, e_list):
@@ -1032,6 +1062,7 @@ class SVGProcessor:
         node = context_node.add(
             shape=element, type="elem rect", id=ident, label=label, lock=lock
         )
+        self.check_for_label_display(node, element)
         self.check_for_line_attributes(node, element)
         if self.precalc_bbox:
             # bounds will be done here, paintbounds won't...
@@ -1075,6 +1106,7 @@ class SVGProcessor:
         node = context_node.add(
             shape=element, type="elem line", id=ident, label=label, lock=lock
         )
+        self.check_for_label_display(node, element)
         self.check_for_line_attributes(node, element)
         if self.precalc_bbox:
             # bounds will be done here, paintbounds won't...
@@ -1202,6 +1234,7 @@ class SVGProcessor:
                     operations=operations,
                     lock=lock,
                 )
+                self.check_for_label_display(node, element)
                 e_list.append(node)
         except OSError:
             pass
@@ -1312,6 +1345,8 @@ class SVGProcessor:
                     "settings"
                 ]  # If settings was set, delete it, or it will mess things up
             elem = context_node.add(type=node_type, **attrs)
+            # This could be an elem point
+            self.check_for_label_display(elem, element)
             try:
                 elem.validate()
             except AttributeError:
@@ -1373,6 +1408,7 @@ class SVGProcessor:
                 label=_label,
                 lock=_lock,
             )
+            self.check_for_label_display(node, element)
             e_list.append(node)
         elif isinstance(element, SVGText):
             self._parse_text(element, ident, _label, _lock, context_node, e_list)
@@ -1437,6 +1473,7 @@ class SVGProcessor:
             context_node = context_node.add(
                 type=e_type, id=ident, label=_label, **e_dict
             )
+            self.check_for_label_display(context_node, element)
             context_node._ref_load = element.values.get("references")
             e_list.append(context_node)
             if hasattr(context_node, "validate"):

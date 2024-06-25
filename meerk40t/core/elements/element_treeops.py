@@ -279,7 +279,7 @@ def init_tree(kernel):
 
     @tree_conditional(lambda node: not is_regmark(node))
     @tree_conditional(lambda node: len(list(self.elems(emphasized=True))) > 1)
-    @tree_operation(_("Group elements"), node_type=elem_nodes, help="")
+    @tree_operation(_("Group elements"), node_type=elem_group_nodes, help="")
     def group_elements(node, **kwargs):
         def minimal_parent(data):
             result = None
@@ -600,7 +600,7 @@ def init_tree(kernel):
 
     @tree_submenu(_("Power"))
     @tree_radio(radio_match_power)
-    @tree_values("power", (100, 250, 333, 500, 667, 750, 1000))
+    @tree_values("power", (100, 250, 300, 333, 500, 667, 750, 1000))
     @tree_calc("power_10", lambda i: round(i / 10, 1))
     @tree_operation(
         _("{power}ppi ({power_10}%)"),
@@ -625,7 +625,7 @@ def init_tree(kernel):
 
     @tree_submenu(_("DPI"))
     @tree_radio(radio_match)
-    @tree_values("dpi", (100, 200, 250, 333.3, 500, 666.6, 750, 1000))
+    @tree_values("dpi", (100, 200, 250, 300, 333.3, 500, 666.6, 750, 1000))
     @tree_operation(
         _("DPI {dpi}"),
         node_type=("op raster", "elem image"),
@@ -2957,7 +2957,7 @@ def init_tree(kernel):
         node_type=effect_nodes,
         help="Convert effect to path",
     )
-    def convert_to_path(singlenode, **kwargs):
+    def convert_to_path_effect(singlenode, **kwargs):
         elements = self.elem_branch
         for node in list(elements.flat(types=effect_nodes, emphasized=True)):
             if not hasattr(node, "as_geometry"):

@@ -23,6 +23,7 @@ from wx import aui
 
 from meerk40t.gui.icons import (
     get_default_icon_size,
+    icon_add_new,
     icon_trash,
     icons8_down,
     icons8_opened_folder,
@@ -479,6 +480,7 @@ class MKRibbonBarPanel(RibbonBarPanel):
         self.apply_enable_rules()
 
     @signal_listener("selected")
+    @signal_listener("element_property_update")
     def on_selected_change(self, origin, node=None, *args):
         self.apply_enable_rules()
 
@@ -636,6 +638,7 @@ class RibbonEditor(wx.Panel):
         if testsize[0] != iconsize:
             iconsize = int(iconsize * iconsize / testsize[0])
 
+        self.button_add_page.SetBitmap(icon_add_new.GetBitmap(resize=iconsize))
         self.button_del_page.SetBitmap(icon_trash.GetBitmap(resize=iconsize, buffer=1))
         self.button_up_page.SetBitmap(icons8_up.GetBitmap(resize=iconsize, buffer=1))
         self.button_down_page.SetBitmap(

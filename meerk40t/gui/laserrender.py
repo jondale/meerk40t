@@ -285,10 +285,17 @@ class LaserRender:
                 node.draw = self.draw_text_node
             elif node.type == "cutcode":
                 node.draw = self.draw_cutcode_node
+            elif node.type == "group":
+                node.draw = self.draw_nothing
             else:
+                # print (f"This node has no method: {node.type}")
                 return False
         # We have now defined that function, draw it.
         node.draw(node, gc, draw_mode, zoomscale=zoomscale, alpha=alpha)
+        if getattr(node, "label_display", False) and node.label:
+            # Display label
+            col = self.context.root.setting(str, "label_display_color", "#ff0000ff")
+            self.display_label(node, gc, draw_mode, zoomscale=zoomscale, alpha=alpha, color=col)
         return True
 
     def make_path(self, gc, path):
@@ -491,6 +498,19 @@ class LaserRender:
             gc.SetBrush(self.brush)
         else:
             gc.SetBrush(wx.TRANSPARENT_BRUSH)
+
+    def draw_nothing(
+        self,
+        node: Node,
+        gc: wx.GraphicsContext,
+        draw_mode,
+        zoomscale=1.0,
+        alpha=255,
+        x: int = 0,
+        y: int = 0,
+    ):
+        # We don't do anything, just a placeholder
+        return
 
     def draw_cutcode_node(
         self,
@@ -885,6 +905,50 @@ class LaserRender:
         dif = 5 * zoomscale
         gc.StrokeLine(point.x - dif, point.y, point.x + dif, point.y)
         gc.StrokeLine(point.x, point.y - dif, point.x, point.y + dif)
+        gc.PopState()
+
+    def display_label(self, node, gc, draw_mode=0, zoomscale=1.0, alpha=255, color="#ff0000ff"):
+        if node is None:
+            return
+        if not node.label:
+            return
+        try:
+            if node.type == "group":
+                bbox = node.bbox_group()
+            else:
+                bbox = node.bbox()
+            # print (f"{node.type}: {bbox}")
+        except AttributeError:
+            # print (f"This node has no bbox: {self.node.type}")
+            return
+        gc.PushState()
+        cx = bbox[0] + 0.5 * (bbox[2] - bbox[0])
+        cy = bbox[1] + 0.25 * (bbox[3] - bbox[1])
+        symbol = node.label
+        font_size = 10 * zoomscale
+        if font_size < 1.0:
+            font_size = 1.0
+        try:
+            font = wx.Font(
+                font_size,
+                wx.FONTFAMILY_SWISS,
+                wx.FONTSTYLE_NORMAL,
+                wx.FONTWEIGHT_NORMAL,
+            )
+        except TypeError:
+            font = wx.Font(
+                int(font_size),
+                wx.FONTFAMILY_SWISS,
+                wx.FONTSTYLE_NORMAL,
+                wx.FONTWEIGHT_NORMAL,
+            )
+        c = Color(color)
+        gc.SetFont(font, wx.Colour(red=c.red, green=c.green, blue=c.blue, alpha=alpha))
+        (t_width, t_height) = gc.GetTextExtent(symbol)
+        x = cx - t_width / 2
+        y = cy - t_height / 2
+        gc.DrawText(symbol, x, y)
+
         gc.PopState()
 
     def draw_text_node(self, node, gc, draw_mode=0, zoomscale=1.0, alpha=255):

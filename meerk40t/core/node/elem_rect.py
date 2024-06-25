@@ -1,6 +1,6 @@
 from copy import copy
 
-from meerk40t.core.node.mixins import FunctionalParameter, Stroked
+from meerk40t.core.node.mixins import FunctionalParameter, Stroked, LabelDisplay
 from meerk40t.core.node.node import Fillrule, Linejoin, Node
 from meerk40t.svgelements import (
     SVG_ATTR_VECTOR_EFFECT,
@@ -12,7 +12,7 @@ from meerk40t.svgelements import (
 from meerk40t.tools.geomstr import Geomstr
 
 
-class RectNode(Node, Stroked, FunctionalParameter):
+class RectNode(Node, Stroked, FunctionalParameter, LabelDisplay):
     """
     RectNode is the bootstrapped node type for the 'elem rect' type.
     """
@@ -150,7 +150,7 @@ class RectNode(Node, Stroked, FunctionalParameter):
             self._bounds[2] + delta,
             self._bounds[3] + delta,
         )
-        self._points_dirty = True
+        self.set_dirty()
         self.notify_scaled(self, sx=sx, sy=sy, ox=ox, oy=oy)
 
     def bbox(self, transformed=True, with_stroke=False):
