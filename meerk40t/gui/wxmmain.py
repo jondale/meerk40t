@@ -42,6 +42,7 @@ from .icons import (  # icon_duplicate,; icon_nohatch,
     icon_air_on,
     icon_air_off,
     icon_open_door,
+    icon_effect_wobble,
     icon_hatch,
     icon_hatch_bidir,
     icon_hatch_diag,
@@ -1293,7 +1294,7 @@ class MeerK40t(MWindow):
             eff = (
                 "effect-wobble",
                 "Apply a wobble movement along the path",
-                icon_hatch_diag_bidir,
+                icon_effect_wobble,
                 "Wobble",
                 "Path",
             )
