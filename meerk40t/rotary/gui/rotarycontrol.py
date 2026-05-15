@@ -249,17 +249,17 @@ class RotaryControlPanel(wx.Panel):
                     text = self._format_position(steps)
         except Exception as exc:
             text = _("Error: %s") % exc
-        dispatch_to_main_thread(self._on_query_done, text)
+        dispatch_to_main_thread(self._on_query_done)(text)
 
     def _worker_console(self, command_line, follow_up_query):
         """Run a console command; optionally re-query position afterward."""
         try:
             self.context.console(command_line)
         except Exception as exc:
-            dispatch_to_main_thread(self._end_busy, _("Error: %s") % exc)
+            dispatch_to_main_thread(self._end_busy)(_("Error: %s") % exc)
             return
         if not follow_up_query:
-            dispatch_to_main_thread(self._end_busy, "")
+            dispatch_to_main_thread(self._end_busy)("")
             return
         # Query position after motion completes.
         driver = getattr(self.context, "driver", None)
@@ -276,7 +276,7 @@ class RotaryControlPanel(wx.Panel):
                 )
         except Exception as exc:
             text = _("Error: %s") % exc
-        dispatch_to_main_thread(self._on_query_done, text)
+        dispatch_to_main_thread(self._on_query_done)(text)
 
     # --- main-thread callbacks ----------------------------------------
 
