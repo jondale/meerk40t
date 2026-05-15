@@ -8,6 +8,7 @@ import wx
 from meerk40t.gui.choicepropertypanel import ChoicePropertyPanel
 from meerk40t.gui.icons import icon_rotary
 from meerk40t.gui.mwindow import MWindow
+from meerk40t.kernel import signal_listener
 
 # from meerk40t.gui.wxutils import TextCtrl, wxButton, wxCheckBox, wxStaticText
 
@@ -211,11 +212,168 @@ _ = wx.GetTranslation
 #     #     event.Skip()
 
 
+class RotarySettingsContainer(wx.Panel):
+    """
+    Holds the three rotary choice sheets (common / substitute / dedicated)
+    in separate ChoicePropertyPanels and Shows/Hides whole sections based
+    on the active rotary_mode.
+
+    The reason for this layer (rather than just using one
+    ChoicePropertyPanel with `conditional` keys on each row) is that the
+    framework's `conditional` only enables/disables controls — it never
+    hides them. For mode-specific settings we want full disappearance so
+    users aren't confronted with greyed-out fields belonging to a mode
+    they're not in.
+
+    Layout note: ChoicePropertyPanel is itself a ScrolledPanel. The common
+    panel sits at the top with proportion 0 (its natural height), and the
+    mode-specific panels share the remaining vertical space at proportion 1
+    so the active panel fills the dialog and can scroll its own content.
+    Hidden panels are skipped by the sizer (Show(False)) so they consume
+    no space.
+    """
+
+    def __init__(self, *args, context=None, **kwds):
+        kwds["style"] = kwds.get("style", 0) | wx.TAB_TRAVERSAL
+        wx.Panel.__init__(self, *args, **kwds)
+        self.context = context  # the device service
+        self.context.themes.set_window_colors(self)
+
+        self.sizer = wx.BoxSizer(wx.VERTICAL)
+
+        # ChoicePropertyPanel is a ScrolledPanel, and at proportion=0 a
+        # ScrolledPanel collapses to its tiny default best-size rather than
+        # the size of its content. After construction we ask the inner sizer
+        # what it actually needs and propagate that as the panel's MinSize,
+        # so the layout scales naturally with theme, DPI, and translated
+        # labels.
+
+        self.common_panel = ChoicePropertyPanel(
+            self, wx.ID_ANY, context=context, choices="rotary_common"
+        )
+        self.sizer.Add(self.common_panel, 0, wx.EXPAND | wx.ALL, 4)
+
+        supports_substitute = getattr(
+            context, "_rotary_supports_substitute", True
+        )
+        if supports_substitute:
+            self.substitute_panel = ChoicePropertyPanel(
+                self, wx.ID_ANY, context=context, choices="rotary_substitute"
+            )
+            self.sizer.Add(self.substitute_panel, 1, wx.EXPAND | wx.ALL, 4)
+        else:
+            self.substitute_panel = None
+
+        supports_dedicated = getattr(
+            context, "_rotary_supports_dedicated", False
+        )
+        if supports_dedicated:
+            self.dedicated_panel = ChoicePropertyPanel(
+                self, wx.ID_ANY, context=context, choices="rotary_dedicated"
+            )
+            # Sit at proportion 0 so it takes only its natural height; the
+            # chuck/roller sub-panel below gets proportion 1 to fill space.
+            self.sizer.Add(self.dedicated_panel, 0, wx.EXPAND | wx.ALL, 4)
+            self.dedicated_chuck_panel = ChoicePropertyPanel(
+                self,
+                wx.ID_ANY,
+                context=context,
+                choices="rotary_dedicated_chuck",
+            )
+            self.sizer.Add(self.dedicated_chuck_panel, 1, wx.EXPAND | wx.ALL, 4)
+            self.dedicated_roller_panel = ChoicePropertyPanel(
+                self,
+                wx.ID_ANY,
+                context=context,
+                choices="rotary_dedicated_roller",
+            )
+            self.sizer.Add(self.dedicated_roller_panel, 1, wx.EXPAND | wx.ALL, 4)
+        else:
+            self.dedicated_panel = None
+            self.dedicated_chuck_panel = None
+            self.dedicated_roller_panel = None
+
+        for panel in (
+            self.common_panel,
+            self.substitute_panel,
+            self.dedicated_panel,
+            self.dedicated_chuck_panel,
+            self.dedicated_roller_panel,
+        ):
+            if panel is None:
+                continue
+            inner = panel.GetSizer()
+            if inner is not None:
+                # CalcMin walks the children and asks each for its min size,
+                # returning the natural content size of this panel.
+                panel.SetMinSize(inner.CalcMin())
+
+        self.SetSizer(self.sizer)
+        # Don't Fit() — ChoicePropertyPanel is a ScrolledPanel and Fit()
+        # collapses scroll geometry. Just lay out at the size we were given.
+        self.Layout()
+
+        self._apply_mode_visibility()
+
+    @signal_listener("rotary_mode")
+    @signal_listener("rotary_type")
+    @signal_listener("device;modified")
+    def _on_mode_signal(self, *_args, **_kwargs):
+        self._apply_mode_visibility()
+
+    def _apply_mode_visibility(self):
+        mode = getattr(self.context, "rotary_mode", "substitute")
+        rtype = getattr(self.context, "rotary_type", "chuck")
+        # If this driver only supports one mode (the other sheet is None),
+        # the active panel is always visible.
+        show_substitute = self.substitute_panel is not None and (
+            mode == "substitute" or self.dedicated_panel is None
+        )
+        show_dedicated = self.dedicated_panel is not None and (
+            mode == "dedicated" or self.substitute_panel is None
+        )
+        if self.substitute_panel is not None:
+            self.substitute_panel.Show(show_substitute)
+        if self.dedicated_panel is not None:
+            self.dedicated_panel.Show(show_dedicated)
+        # Within dedicated mode, show only the diameter sub-panel matching
+        # the selected rotary type (chuck vs roller).
+        if self.dedicated_chuck_panel is not None:
+            self.dedicated_chuck_panel.Show(show_dedicated and rtype == "chuck")
+        if self.dedicated_roller_panel is not None:
+            self.dedicated_roller_panel.Show(show_dedicated and rtype == "roller")
+        # Layout this container; do NOT Fit() / Layout() the parent window,
+        # since that interferes with ScrolledPanel internals.
+        self.sizer.Layout()
+
+    def _all_panels(self):
+        return (
+            self.common_panel,
+            self.substitute_panel,
+            self.dedicated_panel,
+            self.dedicated_chuck_panel,
+            self.dedicated_roller_panel,
+        )
+
+    def pane_show(self):
+        for p in self._all_panels():
+            if p is not None:
+                p.pane_show()
+        self._apply_mode_visibility()
+
+    def pane_hide(self):
+        for p in self._all_panels():
+            if p is not None:
+                p.pane_hide()
+
+
 class RotarySettings(MWindow):
     def __init__(self, *args, **kwds):
-        super().__init__(350, 250, *args, **kwds)
-        self.panel = ChoicePropertyPanel(
-            self, wx.ID_ANY, context=self.context.device, choices="rotary"
+        # Sized to comfortably hold the common panel + the longer of the
+        # two mode panels (Dedicated mode is the tallest with ~6 rows).
+        super().__init__(420, 500, *args, **kwds)
+        self.panel = RotarySettingsContainer(
+            self, wx.ID_ANY, context=self.context.device
         )
         self.sizer.Add(self.panel, 1, wx.EXPAND, 0)
         self.add_module_delegate(self.panel)

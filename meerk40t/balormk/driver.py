@@ -681,6 +681,108 @@ class BalorDriver:
         """
         self.home()
 
+    # ------------------------------------------------------------------
+    # Optional rotary axis interface — consumed by the driver-agnostic
+    # rotary console commands in meerk40t.rotary.rotary. Drivers without
+    # a hardware rotary axis simply do not define these methods; callers
+    # gate with hasattr.
+    # ------------------------------------------------------------------
+
+    def rotary_capabilities(self):
+        """
+        Describe what rotary operations this driver supports.
+
+        Returns None when the user has not configured the rotary for a
+        dedicated motor axis (i.e. rotary_mode != "dedicated"). The
+        orchestration layer (console commands, GUI, cutplan strip stage)
+        keys off a non-None return to decide whether to drive the aux
+        axis.
+        """
+        if getattr(self.service, "rotary_mode", "dedicated") != "dedicated":
+            return None
+        return {
+            "axes": 1,
+            "axis_label": "aux0",
+            "has_position_feedback": True,
+            "units": "steps",
+            "min_speed": 1,
+            "max_speed": 0xFFFF,
+        }
+
+    def _rotary_speed_pair(self, speed):
+        """Resolve (minspeed, maxspeed) from caller arg + service defaults."""
+        default_min = getattr(self.service, "rotary_min_speed", 100)
+        default_max = getattr(self.service, "rotary_max_speed", 5000)
+        if speed is None:
+            return default_min, default_max
+        if isinstance(speed, (tuple, list)) and len(speed) >= 2:
+            return int(speed[0]), int(speed[1])
+        return default_min, int(speed)
+
+    @staticmethod
+    def _rotary_encode_pos(position):
+        """BJJCZ axis position encoding: negative -> 0x80000000 offset."""
+        pos = position if position >= 0 else -position + 0x80000000
+        return pos & 0xFFFF, (pos >> 16) & 0xFFFF
+
+    @staticmethod
+    def _rotary_decode_pos(pos_args):
+        if pos_args is None:
+            return None
+        current = pos_args[1] | (pos_args[2] << 16)
+        if current > 0x80000000:
+            current = -current + 0x80000000
+        return current
+
+    def rotary_move_to(self, position, speed=None, accel_time=None, axis_index=0):
+        """Absolute move on rotary aux axis. Position is in motor steps."""
+        if self.connection is None:
+            return
+        minspeed, maxspeed = self._rotary_speed_pair(speed)
+        acc = (
+            accel_time
+            if accel_time is not None
+            else getattr(self.service, "rotary_accel_time", 100)
+        )
+        self.connection.set_axis_motion_param(
+            minspeed & 0xFFFF, maxspeed & 0xFFFF
+        )
+        self.connection.set_axis_origin_param(acc)
+        p0, p1 = self._rotary_encode_pos(int(position))
+        self.connection.move_axis_to(p0, p1)
+
+    def rotary_move_relative(
+        self, delta, speed=None, accel_time=None, axis_index=0
+    ):
+        """Relative move on rotary aux axis. Delta is in motor steps."""
+        current = self.rotary_position(axis_index)
+        if current is None:
+            return
+        self.rotary_move_to(
+            current + int(delta),
+            speed=speed,
+            accel_time=accel_time,
+            axis_index=axis_index,
+        )
+
+    def rotary_position(self, axis_index=0):
+        """Return current rotary axis position in motor steps, or None if unavailable."""
+        if self.connection is None:
+            return None
+        return self._rotary_decode_pos(self.connection.get_axis_pos(axis_index))
+
+    def rotary_wait(self):
+        """Block until the rotary motion completes."""
+        if self.connection is None:
+            return
+        self.connection.wait_axis()
+
+    def rotary_set_origin(self, axis_index=0):
+        """Issue the controller's 'go origin' for the aux axis (effective zero)."""
+        if self.connection is None:
+            return
+        self.connection.axis_go_origin()
+
     def rapid_mode(self):
         """
         Expects to be in rapid jogging mode.

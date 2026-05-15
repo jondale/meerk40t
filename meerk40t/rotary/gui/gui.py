@@ -22,6 +22,9 @@ def plugin(service, lifecycle):
 
         _ = service._
 
+        # Settings window is meaningful for every rotary-capable device, since
+        # both view-substitution and dedicated-axis rotaries get configured
+        # there.
         service.register("window/Rotary", RotarySettings)
         service.register(
             "button/device/Rotary",
@@ -32,6 +35,27 @@ def plugin(service, lifecycle):
                 "action": lambda v: service.console("window toggle Rotary\n"),
             },
         )
+
+        # The jog/control window only does anything on drivers that actually
+        # implement rotary_move_* methods (currently only balor; GRBL is
+        # next). Don't clutter other devices' menus with a button that would
+        # always say "unsupported".
+        driver_name = type(service).__name__.lower()
+        if "balor" in driver_name or "grbl" in driver_name:
+            from meerk40t.rotary.gui.rotarycontrol import RotaryControlWindow
+
+            service.register("window/RotaryControl", RotaryControlWindow)
+            service.register(
+                "button/device/RotaryControl",
+                {
+                    "label": _("Rotary Jog"),
+                    "icon": icon_rotary,
+                    "tip": _("Opens the rotary jog/control window."),
+                    "action": lambda v: service.console(
+                        "window toggle RotaryControl\n"
+                    ),
+                },
+            )
 
         @service.console_command("rotaryview", help=_("Rotary View of Scene"))
         def toggle_rotary_view(*args, **kwargs):
