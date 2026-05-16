@@ -115,6 +115,13 @@ class RotaryControlPanel(wx.Panel):
         )
         self.btn_test.Bind(wx.EVT_BUTTON, self.on_test)
         act_box.Add(self.btn_test, 1, wx.ALL, 4)
+
+        self.btn_frame_slice = wxButton(self, wx.ID_ANY, _("Frame Slice"))
+        self.btn_frame_slice.SetToolTip(
+            _("Red-light trace the outline of a single rotary slice.")
+        )
+        self.btn_frame_slice.Bind(wx.EVT_BUTTON, self.on_frame_slice)
+        act_box.Add(self.btn_frame_slice, 1, wx.ALL, 4)
         sizer.Add(act_box, 0, wx.EXPAND | wx.ALL, 4)
 
         # Status line
@@ -154,6 +161,7 @@ class RotaryControlPanel(wx.Panel):
             self.btn_home,
             self.btn_set_zero,
             self.btn_test,
+            self.btn_frame_slice,
             self.btn_refresh,
             self.combo_jog_distance,
         ):
@@ -323,6 +331,17 @@ class RotaryControlPanel(wx.Panel):
             lambda: self._worker_console("rotary_test\n", True),
             _("Running rotary test…"),
         )
+
+    def on_frame_slice(self, _event):
+        """Launch a red-light trace of one slice outline. Non-blocking.
+
+        The rotary_frame_slice command outputs geometry; piping it to
+        'light' (balor) or the device's equivalent framing command
+        makes it trace. If the device has no 'light' command, the
+        geometry output is silently dropped by the console.
+        """
+        self.context.console("rotary_frame_slice light\n")
+        self._set_status(_("Framing slice…"))
 
     # --- pane lifecycle ------------------------------------------------
 

@@ -20,6 +20,8 @@ from meerk40t.core.cutcode.linecut import LineCut
 from meerk40t.core.cutcode.outputcut import OutputCut
 from meerk40t.core.cutcode.plotcut import PlotCut
 from meerk40t.core.cutcode.quadcut import QuadCut
+from meerk40t.core.cutcode.rastercut import RasterCut
+from meerk40t.core.cutcode.rotaryadvancecut import RotaryAdvanceCut
 from meerk40t.core.cutcode.waitcut import WaitCut
 from meerk40t.core.geomstr import Geomstr
 from meerk40t.core.plotplanner import PlotPlanner
@@ -397,9 +399,24 @@ class BalorDriver:
         self.queue = list()
         total = len(queue)
         current = 0
+        # Debug: dump queue contents for rotary diagnostics
+        raster_count = sum(1 for q in queue if isinstance(q, RasterCut))
+        advance_count = sum(1 for q in queue if isinstance(q, RotaryAdvanceCut))
+        if advance_count > 0:
+            print(f"[plot_start] Queue: {total} items, {raster_count} rasters, {advance_count} advances")
         for q in queue:
             current += 1
             self._set_queue_status(current, total)
+            if isinstance(q, RasterCut):
+                w, h = q.image.size
+                print(
+                    f"[plot_start {current}/{total}] RasterCut {w}x{h}px "
+                    f"offset=({q.offset_x:.1f},{q.offset_y:.1f}) "
+                    f"step=({q.step_x:.4f},{q.step_y:.4f}) "
+                    f"horiz={q.horizontal}"
+                )
+            elif isinstance(q, RotaryAdvanceCut):
+                print(f"[plot_start {current}/{total}] RotaryAdvance {q.steps} steps")
             settings = q.settings
             penbox = settings.get("penbox_value")
             if penbox is not None:
@@ -535,6 +552,19 @@ class BalorDriver:
                     con.rapid_mode()
                     self._wait_for_input_protocol(q.input_mask, q.input_value)
                     con.program_mode()
+            elif isinstance(q, RotaryAdvanceCut):
+                # Flush pending list commands, leave program mode, advance
+                # the rotary, then re-enter program mode for the next slice.
+                pos_before = self.rotary_position()
+                con.rapid_mode()
+                self.rotary_move_relative(q.steps, speed=q.speed)
+                self.rotary_wait()
+                pos_after = self.rotary_position()
+                print(
+                    f"[RotaryAdvance] steps={q.steps}, speed={q.speed}, "
+                    f"pos: {pos_before} -> {pos_after}"
+                )
+                con.program_mode()
             else:
                 # Rastercut
                 self.plot_planner.push(q)

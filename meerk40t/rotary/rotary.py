@@ -70,16 +70,17 @@ class Rotary:
         service._rotary_supports_dedicated = supports_dedicated
         service._rotary_multi_mode = multi_mode
 
-        # If the device's persisted rotary_mode falls outside what this
-        # driver supports (e.g. an old config that named a mode this driver
-        # doesn't expose), pin it to a supported value before registration
-        # so downstream checks don't see a stale state.
+        # Ensure rotary_mode is always set on the service, even when the
+        # UI combobox is hidden (single-mode drivers). This prevents
+        # getattr(..., "rotary_mode") from falling back to a wrong default
+        # elsewhere in the codebase.
         existing_mode = getattr(service, "rotary_mode", None)
-        if existing_mode is not None:
-            if (existing_mode == "substitute" and not supports_substitute) or (
-                existing_mode == "dedicated" and not supports_dedicated
-            ):
-                service.rotary_mode = mode_default
+        if existing_mode is None:
+            service.rotary_mode = mode_default
+        elif (existing_mode == "substitute" and not supports_substitute) or (
+            existing_mode == "dedicated" and not supports_dedicated
+        ):
+            service.rotary_mode = mode_default
 
         _ = service._
 
@@ -190,6 +191,38 @@ class Rotary:
             )
             dedicated_choices.append(
                 {
+                    "attr": "rotary_scan_axis",
+                    "object": service,
+                    "default": "Y",
+                    "type": str,
+                    "style": "combosmall",
+                    "choices": ("X", "Y"),
+                    "label": _("Scan Axis"),
+                    "tip": _(
+                        "Which axis the rotary is physically mounted along. "
+                        "If the rotary shaft runs left-right, choose X. "
+                        "If it runs top-bottom, choose Y. The design is "
+                        "sliced perpendicular to the rotary axis."
+                    ),
+                    "signals": "device;modified",
+                }
+            )
+            dedicated_choices.append(
+                {
+                    "attr": "rotary_reverse_direction",
+                    "object": service,
+                    "default": False,
+                    "type": bool,
+                    "label": _("Reverse Direction"),
+                    "tip": _(
+                        "Reverse the rotary motor direction between slices. "
+                        "Enable if the output is backwards or slices are "
+                        "processed in the wrong order."
+                    ),
+                }
+            )
+            dedicated_choices.append(
+                {
                     "attr": "rotary_steps_per_rotation",
                     "object": service,
                     "default": 12800,
@@ -286,6 +319,46 @@ class Rotary:
                         ),
                     }
                 )
+
+        # ----- Slicing settings (dedicated mode only) -----
+        # These control how raster jobs are broken into segments for rotary
+        # advancement. Split size is the distance along the rotary axis per
+        # slice; overlap adds bleed at boundaries to hide seams.
+        if supports_dedicated:
+            dedicated_choices.extend(
+                [
+                    {
+                        "attr": "rotary_split_size",
+                        "object": service,
+                        "default": "1mm",
+                        "type": Length,
+                        "label": _("Split Size"),
+                        "tip": _(
+                            "Distance along the rotary axis for each slice. "
+                            "The design is split into segments of this size; "
+                            "each segment is marked, then the rotary advances. "
+                            "For galvo lasers this should not exceed the field "
+                            "size. Smaller values reduce distortion on curved "
+                            "surfaces but increase job time."
+                        ),
+                        "nonzero": True,
+                        "subsection": _("Slicing"),
+                    },
+                    {
+                        "attr": "rotary_overlap",
+                        "object": service,
+                        "default": "0.05mm",
+                        "type": Length,
+                        "label": _("Overlap"),
+                        "tip": _(
+                            "Extra margin at each slice boundary. Adjacent "
+                            "slices overlap by this amount to eliminate visible "
+                            "gaps between segments."
+                        ),
+                        "subsection": _("Slicing"),
+                    },
+                ]
+            )
 
         # suppress_home is mode-agnostic; lives at the bottom of the common
         # sheet so it's always visible (gated to active state via the
@@ -608,6 +681,77 @@ class Rotary:
             if hasattr(driver, "rotary_wait"):
                 driver.rotary_wait()
             channel(_("Rotary test complete."))
+
+        @service.console_command(
+            "rotary_frame_slice",
+            help=_(
+                "Generate the outline geometry of a single rotary slice. "
+                "Pipe to the device's light command to trace it, e.g. "
+                "'rotary_frame_slice light'."
+            ),
+            output_type="geometry",
+        )
+        def rotary_frame_slice(command, channel, _, **kwargs):
+            try:
+                from meerk40t.core.geomstr import Geomstr
+                from meerk40t.core.units import UNITS_PER_MM
+            except ImportError:
+                channel(_("Required modules not available."))
+                return
+            view = getattr(service, "view", None)
+            if view is None:
+                channel(_("No device view available."))
+                return
+
+            split_raw = getattr(service, "rotary_split_size", "1mm")
+            try:
+                split_mm = Length(split_raw).mm
+            except Exception:
+                split_mm = 1.0
+
+            scan_axis = getattr(service, "rotary_scan_axis", "Y")
+
+            # Use the device's work area dimensions (works for any
+            # driver, not just galvo with lens_size).
+            bed_width = float(Length(view.width))
+            bed_height = float(Length(view.height))
+
+            # Build the rectangle in scene coordinates (Tats).
+            # The slice is split_size along the scan axis and the
+            # full bed perpendicular to it, centered in the work area.
+            split_tats = split_mm * UNITS_PER_MM
+            cx = bed_width / 2.0
+            cy = bed_height / 2.0
+
+            if scan_axis.upper() == "X":
+                # Rotary axis runs along X: object scrolls through Y.
+                # Slice is narrow in Y (horizontal strip), full in X.
+                x0 = 0
+                y0 = cy - split_tats / 2.0
+                w = bed_width
+                h = split_tats
+            else:
+                # Rotary axis runs along Y: object scrolls through X.
+                # Slice is narrow in X (vertical strip), full in Y.
+                x0 = cx - split_tats / 2.0
+                y0 = 0
+                w = split_tats
+                h = bed_height
+
+            geometry = Geomstr.rect(x0, y0, w, h)
+
+            channel(
+                _(
+                    "Framing rotary slice: {w:.1f}mm x {h:.1f}mm "
+                    "(scan_axis={axis}, split={split:.2f}mm)"
+                ).format(
+                    w=w / UNITS_PER_MM,
+                    h=h / UNITS_PER_MM,
+                    axis=scan_axis,
+                    split=split_mm,
+                )
+            )
+            return "geometry", geometry
 
     # These convenience accessors are called by other parts of the codebase
     # (drivers, GUI). They must tolerate missing attributes because, for any

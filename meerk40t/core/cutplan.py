@@ -747,6 +747,375 @@ class CutPlan:
             self.commands.append(self.basic_cutcode_sequencing)
         self.commands.append(self.merge_cutcode)
 
+        # If rotary is active in dedicated mode, add the strip-splitting
+        # stage after merge. This walks the final CutCode, splits RasterCuts
+        # into slices of rotary_split_size, and inserts RotaryAdvanceCut
+        # between them.
+        device = getattr(context, "device", None)
+        if device is not None:
+            rotary_active = getattr(device, "rotary_active", False)
+            rotary_mode = getattr(device, "rotary_mode", "substitute")
+            if rotary_active and rotary_mode == "dedicated":
+                self.commands.append(self.rotary_strip)
+
+    def rotary_strip(self):
+        """
+        Prepare CutCode for dedicated-axis rotary engraving.
+
+        Raster cuts are split into horizontal strips of rotary_split_size.
+        Vector cuts use whole-shape assignment: each shape is assigned to
+        the slice containing its Y-center and kept intact. A
+        RotaryAdvanceCut is inserted between slices so the rotary motor
+        advances the object surface between marking passes.
+        """
+        from math import pi
+
+        from meerk40t.core.cutcode.rotaryadvancecut import RotaryAdvanceCut
+        from meerk40t.core.units import Length as ULength
+
+        device = getattr(self.context, "device", None)
+        if device is None:
+            return
+
+        # Read split settings.
+        split_size_raw = getattr(device, "rotary_split_size", "1mm")
+        overlap_raw = getattr(device, "rotary_overlap", "0.05mm")
+        try:
+            split_size_mm = ULength(split_size_raw).mm
+        except Exception:
+            split_size_mm = 1.0
+        try:
+            overlap_mm = ULength(overlap_raw).mm
+        except Exception:
+            overlap_mm = 0.05
+        if split_size_mm <= 0:
+            return
+
+        # Convert split size from mm to motor steps for the advance command.
+        spr = getattr(device, "rotary_steps_per_rotation", 12800) or 1
+        rtype = getattr(device, "rotary_type", "chuck")
+        if rtype == "roller":
+            diameter_raw = getattr(device, "rotary_roller_diameter", "30mm")
+        else:
+            diameter_raw = getattr(device, "rotary_object_diameter", "50mm")
+        try:
+            diameter_mm = ULength(diameter_raw).mm
+        except Exception:
+            diameter_mm = 50.0
+        if diameter_mm <= 0:
+            return
+        circumference_mm = diameter_mm * pi
+        steps_per_split = int(round(split_size_mm / circumference_mm * spr))
+        if steps_per_split <= 0:
+            return
+
+        # Which axis the rotary scrolls: "X" or "Y". Strips are split
+        # along this axis; the galvo marks perpendicular to it.
+        scan_axis = getattr(device, "rotary_scan_axis", "Y")
+
+        # Reverse direction flips the sign of the advance steps.
+        if getattr(device, "rotary_reverse_direction", False):
+            steps_per_split = -steps_per_split
+
+        # Convert mm to device units using the view's actual matrix.
+        # dpi_to_steps gives device units per pixel at a given DPI.
+        # 1 inch / DPI = pixel size. step_x * DPI = device units per inch.
+        # device_units_per_mm = device_units_per_inch / 25.4.
+        # This correctly handles any view transforms (galvo lens scaling,
+        # flips, rotation, etc.) rather than just native_scale.
+        from meerk40t.core.units import UNITS_PER_MM
+
+        view = getattr(device, "view", None)
+        if view is not None:
+            # Use the view matrix to get the actual scale. We ask for
+            # step sizes at 1 DPI — that gives us device units per inch.
+            step_x, step_y = view.dpi_to_steps(1)
+            device_units_per_mm_x = step_x / 25.4
+            device_units_per_mm_y = step_y / 25.4
+        else:
+            device_units_per_mm_x = UNITS_PER_MM
+            device_units_per_mm_y = UNITS_PER_MM
+
+        # Pick the conversion factor for the split axis. If rotary axis
+        # is X, object scrolls through Y, so we split along Y.
+        if scan_axis.upper() == "X":
+            device_units_per_mm = device_units_per_mm_y
+        else:
+            device_units_per_mm = device_units_per_mm_x
+
+        if self.channel:
+            lens_size = getattr(device, "lens_size", "?")
+            self.channel("=== Rotary Strip Debug ===")
+            self.channel(f"  Device: {type(device).__name__}")
+            self.channel(f"  Lens size: {lens_size}")
+            self.channel(f"  Scan axis: {scan_axis}")
+            self.channel(f"  Reverse direction: {getattr(device, 'rotary_reverse_direction', False)}")
+            self.channel(f"  Split size: {split_size_mm:.4f}mm")
+            self.channel(f"  Overlap: {overlap_mm:.4f}mm")
+            self.channel(f"  Rotary type: {rtype}")
+            self.channel(f"  Diameter: {diameter_mm:.2f}mm")
+            self.channel(f"  Circumference: {circumference_mm:.2f}mm")
+            self.channel(f"  Steps/rotation: {spr}")
+            self.channel(f"  Steps/split: {steps_per_split}")
+            self.channel(f"  Device units/mm: X={device_units_per_mm_x:.4f}, Y={device_units_per_mm_y:.4f}")
+            self.channel(f"  Using axis {scan_axis}: {device_units_per_mm:.4f} dev units/mm")
+            self.channel(f"  Split in device units: {split_size_mm * device_units_per_mm:.2f}")
+            if view is not None:
+                self.channel(f"  View native_scale: X={view.native_scale_x:.6f}, Y={view.native_scale_y:.6f}")
+                self.channel(f"  View matrix: {view.matrix}")
+            self.channel(f"  Plan items: {len(self.plan)}")
+            for idx, item in enumerate(self.plan):
+                if isinstance(item, CutCode):
+                    rcount = sum(1 for c in item if isinstance(c, RasterCut))
+                    vcount = sum(1 for c in item if not isinstance(c, RasterCut))
+                    self.channel(f"    [{idx}] CutCode: {len(item)} items ({rcount} raster, {vcount} vector)")
+                else:
+                    self.channel(f"    [{idx}] {type(item).__name__}")
+
+        new_plan = []
+        for item in self.plan:
+            if not isinstance(item, CutCode):
+                new_plan.append(item)
+                continue
+            new_cutcode = self._split_cutcode_for_rotary(
+                item, split_size_mm, overlap_mm, steps_per_split,
+                scan_axis, device_units_per_mm
+            )
+            new_plan.append(new_cutcode)
+        self.plan.clear()
+        self.plan.extend(new_plan)
+
+    def _split_cutcode_for_rotary(
+        self, cutcode, split_size_mm, overlap_mm, steps_per_split,
+        scan_axis, device_units_per_mm
+    ):
+        """
+        Walk a CutCode and prepare it for dedicated-axis rotary engraving.
+
+        - RasterCuts are split into strips along the scan_axis with
+          RotaryAdvanceCut between them. All strips are marked at the
+          same position in the galvo field (the first strip's offset);
+          the rotary motor handles the physical displacement.
+        - Vector CutObjects use whole-shape assignment: each shape is
+          assigned to the slice containing its center along scan_axis,
+          shapes are sorted by slice, and RotaryAdvanceCut is inserted
+          between slices.
+
+        @param scan_axis: "X" or "Y" — the axis the rotary scrolls.
+        @param device_units_per_mm: conversion factor from mm to device
+            coordinate units (accounts for the device's native scale).
+        """
+        from meerk40t.core.cutcode.rotaryadvancecut import RotaryAdvanceCut
+
+        split_device = split_size_mm * device_units_per_mm
+        # scan_axis names the rotary's physical axis. If the rotary axis
+        # is X, the object scrolls through Y, so we split along Y (use_x=False).
+        # If the rotary axis is Y, the object scrolls through X, split along X.
+        use_x = scan_axis.upper() == "Y"
+
+        # First pass: separate rasters and vectors, recording each item's
+        # slice assignment.  Items are (slice_index, sequence_of_cuts).
+        sliced_items = []
+
+        for cut in cutcode:
+            if isinstance(cut, RasterCut):
+                strips = self._split_raster(
+                    cut, split_size_mm, overlap_mm, use_x,
+                    device_units_per_mm, self.channel
+                )
+                for i, strip in enumerate(strips):
+                    sliced_items.append((i, [strip]))
+            elif isinstance(cut, RotaryAdvanceCut):
+                # Pass through any pre-existing advance cuts.
+                sliced_items.append((None, [cut]))
+            else:
+                # Vector cut — assign to slice by center along scan axis.
+                center = self._cut_axis_center(cut, use_x)
+                slice_idx = int(center / split_device) if split_device else 0
+                sliced_items.append((slice_idx, [cut]))
+
+        # Merge consecutive items in the same slice so we don't insert
+        # unnecessary advances between cuts in the same shape/area.
+        merged = []
+        for slice_idx, cuts in sliced_items:
+            if merged and merged[-1][0] == slice_idx and slice_idx is not None:
+                merged[-1][1].extend(cuts)
+            else:
+                merged.append((slice_idx, list(cuts)))
+
+        # Sort by slice index so the rotary advances monotonically.
+        merged.sort(key=lambda x: x[0] if x[0] is not None else -1)
+
+        # Build the result CutCode, inserting RotaryAdvanceCut between
+        # slices that are at different positions.
+        result = CutCode()
+        prev_slice = None
+        advance_count = 0
+        for slice_idx, cuts in merged:
+            if slice_idx is not None and prev_slice is not None:
+                delta = slice_idx - prev_slice
+                if delta != 0:
+                    advance_steps = delta * steps_per_split
+                    result.append(RotaryAdvanceCut(advance_steps))
+                    advance_count += 1
+            for c in cuts:
+                result.append(c)
+            if slice_idx is not None:
+                prev_slice = slice_idx
+
+        if self.channel:
+            self.channel("  --- Final CutCode ---")
+            rcount = sum(1 for c in result if isinstance(c, RasterCut))
+            acount = sum(1 for c in result if isinstance(c, RotaryAdvanceCut))
+            ocount = len(result) - rcount - acount
+            self.channel(f"    Total items: {len(result)}")
+            self.channel(f"    Raster strips: {rcount}")
+            self.channel(f"    Rotary advances: {acount}")
+            self.channel(f"    Other cuts: {ocount}")
+            # Dump the sequence
+            for i, c in enumerate(result):
+                if isinstance(c, RasterCut):
+                    w, h = c.image.size
+                    self.channel(
+                        f"    [{i}] RasterCut {w}x{h}px "
+                        f"offset=({c.offset_x:.1f},{c.offset_y:.1f}) "
+                        f"step=({c.step_x:.4f},{c.step_y:.4f}) "
+                        f"horiz={c.horizontal}"
+                    )
+                elif isinstance(c, RotaryAdvanceCut):
+                    self.channel(f"    [{i}] RotaryAdvance {c.steps} steps")
+                else:
+                    self.channel(f"    [{i}] {type(c).__name__}")
+            self.channel("=== End Rotary Strip Debug ===")
+        return result
+
+    @staticmethod
+    def _cut_axis_center(cut, use_x):
+        """Return the center of a CutObject along the given axis."""
+        start = cut.start
+        end = cut.end
+        if start is None or end is None:
+            return 0
+        idx = 0 if use_x else 1
+        s = start[idx] if hasattr(start, '__getitem__') else 0
+        e = end[idx] if hasattr(end, '__getitem__') else 0
+        return (s + e) / 2.0
+
+    @staticmethod
+    def _split_raster(raster_cut, split_size_mm, overlap_mm, use_x=False,
+                      device_units_per_mm=None, channel=None):
+        """
+        Split a RasterCut into strips along the rotary scan axis.
+
+        When use_x is False (default, rotary scrolls along Y), the image
+        is sliced into horizontal bands (rows). When use_x is True
+        (rotary scrolls along X), sliced into vertical bands (columns).
+
+        All strips are positioned at the SAME offset in the galvo field
+        (the first strip's position). The rotary motor handles the
+        physical displacement between strips — the galvo just re-marks
+        the same field area each time.
+
+        Returns a list of RasterCut objects.
+        """
+        image = raster_cut.image
+        width_px, height_px = image.size
+
+        if device_units_per_mm is None:
+            from meerk40t.core.units import UNITS_PER_MM
+            device_units_per_mm = UNITS_PER_MM
+
+        split_device = split_size_mm * device_units_per_mm
+        overlap_device = overlap_mm * device_units_per_mm
+
+        if use_x:
+            # Split along X (vertical columns).
+            extent_px = width_px
+            step = raster_cut.step_x
+        else:
+            # Split along Y (horizontal rows).
+            extent_px = height_px
+            step = raster_cut.step_y
+
+        if step == 0:
+            return [raster_cut]
+
+        split_px = int(round(abs(split_device / step)))
+        overlap_px = int(round(abs(overlap_device / step)))
+
+        if channel:
+            channel("  --- Raster Split ---")
+            channel(f"    Image size: {width_px}x{height_px} px")
+            channel(f"    step_x={raster_cut.step_x:.6f}, step_y={raster_cut.step_y:.6f}")
+            channel(f"    offset_x={raster_cut.offset_x:.2f}, offset_y={raster_cut.offset_y:.2f}")
+            channel(f"    horizontal={raster_cut.horizontal} (override to {not use_x}), bidirectional={raster_cut.bidirectional}")
+            channel(f"    start_min_x={raster_cut.start_minimum_x}, start_min_y={raster_cut.start_minimum_y}")
+            channel(f"    inverted={raster_cut.inverted}, overscan={raster_cut.scan}")
+            channel(f"    Split axis: {'X' if use_x else 'Y'}")
+            channel(f"    Splitting along extent: {extent_px} px")
+            channel(f"    Step along split axis: {step:.6f} dev units/px")
+            channel(f"    device_units_per_mm: {device_units_per_mm:.4f}")
+            channel(f"    split_device: {split_device:.4f} dev units = {split_size_mm:.4f}mm")
+            channel(f"    overlap_device: {overlap_device:.4f} dev units = {overlap_mm:.4f}mm")
+            channel(f"    split_px: {split_px} px")
+            channel(f"    overlap_px: {overlap_px} px")
+            channel(f"    Actual strip width in mm: {split_px * abs(step) / device_units_per_mm:.4f}mm")
+            channel(f"    Actual overlap in mm: {overlap_px * abs(step) / device_units_per_mm:.4f}mm")
+            num_strips = 0
+            p = 0
+            while p < extent_px:
+                num_strips += 1
+                p += split_px
+            channel(f"    Expected strips: {num_strips}")
+
+        if split_px <= 0 or split_px >= extent_px:
+            return [raster_cut]
+
+        strips = []
+        pos = 0
+        while pos < extent_px:
+            pos_end = min(pos + split_px + overlap_px, extent_px)
+
+            if use_x:
+                crop_box = (pos, 0, pos_end, height_px)
+            else:
+                crop_box = (0, pos, width_px, pos_end)
+            strip_image = image.crop(crop_box)
+
+            # All strips are placed at the same galvo field position.
+            # The rotary advances the object between strips.
+            #
+            # Force scan direction perpendicular to the split axis so
+            # scan lines run along the long side of each strip (matching
+            # LightBurn: rotary axis X → scan horizontal, Y → vertical).
+            # use_x means we're splitting along X (object scrolls through
+            # X), so the strip is tall/narrow → scan vertically.
+            # Not use_x means splitting along Y → strip is wide/short
+            # → scan horizontally.
+            strip_horizontal = not use_x
+
+            strip = RasterCut(
+                image=strip_image,
+                offset_x=raster_cut.offset_x,
+                offset_y=raster_cut.offset_y,
+                step_x=raster_cut.step_x,
+                step_y=raster_cut.step_y,
+                inverted=raster_cut.inverted,
+                bidirectional=raster_cut.bidirectional,
+                horizontal=strip_horizontal,
+                start_minimum_y=raster_cut.start_minimum_y,
+                start_minimum_x=raster_cut.start_minimum_x,
+                overscan=raster_cut.scan,
+                settings=raster_cut.settings,
+                passes=raster_cut.passes,
+                parent=raster_cut.parent,
+                color=raster_cut.color,
+                label=raster_cut.label,
+            )
+            strips.append(strip)
+            pos += split_px  # Advance by split_px (not split+overlap)
+        return strips
+
     def combine_effects(self):
         """
         Will browse through the cutcode entries grouping everything together
