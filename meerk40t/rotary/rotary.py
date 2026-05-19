@@ -191,18 +191,19 @@ class Rotary:
             )
             dedicated_choices.append(
                 {
-                    "attr": "rotary_scan_axis",
+                    "attr": "rotary_wrap_axis",
                     "object": service,
                     "default": "Y",
                     "type": str,
                     "style": "combosmall",
                     "choices": ("X", "Y"),
-                    "label": _("Scan Axis"),
+                    "label": _("Rotary Axis"),
                     "tip": _(
-                        "Which axis the rotary is physically mounted along. "
-                        "If the rotary shaft runs left-right, choose X. "
-                        "If it runs top-bottom, choose Y. The design is "
-                        "sliced perpendicular to the rotary axis."
+                        "Which design axis is wrapped around the object by "
+                        "the rotary. Choose Y if the Y axis wraps around the "
+                        "object (the rotary drives Y); choose X if the X axis "
+                        "wraps around the object. The design is sliced into "
+                        "strips along this axis."
                     ),
                     "signals": "device;modified",
                 }
@@ -709,7 +710,7 @@ class Rotary:
             except Exception:
                 split_mm = 1.0
 
-            scan_axis = getattr(service, "rotary_scan_axis", "Y")
+            wrap_axis = getattr(service, "rotary_wrap_axis", "Y")
 
             # Use the device's work area dimensions (works for any
             # driver, not just galvo with lens_size).
@@ -717,21 +718,21 @@ class Rotary:
             bed_height = float(Length(view.height))
 
             # Build the rectangle in scene coordinates (Tats).
-            # The slice is split_size along the scan axis and the
+            # The slice is split_size along the wrap axis and the
             # full bed perpendicular to it, centered in the work area.
             split_tats = split_mm * UNITS_PER_MM
             cx = bed_width / 2.0
             cy = bed_height / 2.0
 
-            if scan_axis.upper() == "X":
-                # Rotary axis runs along X: object scrolls through Y.
+            if wrap_axis.upper() == "Y":
+                # Y wraps around the object: design is sliced along Y.
                 # Slice is narrow in Y (horizontal strip), full in X.
                 x0 = 0
                 y0 = cy - split_tats / 2.0
                 w = bed_width
                 h = split_tats
             else:
-                # Rotary axis runs along Y: object scrolls through X.
+                # X wraps around the object: design is sliced along X.
                 # Slice is narrow in X (vertical strip), full in Y.
                 x0 = cx - split_tats / 2.0
                 y0 = 0
@@ -743,11 +744,11 @@ class Rotary:
             channel(
                 _(
                     "Framing rotary slice: {w:.1f}mm x {h:.1f}mm "
-                    "(scan_axis={axis}, split={split:.2f}mm)"
+                    "(rotary_axis={axis}, split={split:.2f}mm)"
                 ).format(
                     w=w / UNITS_PER_MM,
                     h=h / UNITS_PER_MM,
-                    axis=scan_axis,
+                    axis=wrap_axis,
                     split=split_mm,
                 )
             )

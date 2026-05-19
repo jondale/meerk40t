@@ -809,9 +809,9 @@ class CutPlan:
         if steps_per_split <= 0:
             return
 
-        # Which axis the rotary scrolls: "X" or "Y". Strips are split
-        # along this axis; the galvo marks perpendicular to it.
-        scan_axis = getattr(device, "rotary_scan_axis", "Y")
+        # Which design axis is wrapped around the object: "X" or "Y".
+        # The design is sliced into strips along this axis.
+        wrap_axis = getattr(device, "rotary_wrap_axis", "Y")
 
         # Reverse direction flips the sign of the advance steps.
         if getattr(device, "rotary_reverse_direction", False):
@@ -836,19 +836,55 @@ class CutPlan:
             device_units_per_mm_x = UNITS_PER_MM
             device_units_per_mm_y = UNITS_PER_MM
 
-        # Pick the conversion factor for the split axis. If rotary axis
-        # is X, object scrolls through Y, so we split along Y.
-        if scan_axis.upper() == "X":
+        # Pick the conversion factor for the split axis. The design is
+        # sliced along the wrap axis, so use that axis's scale.
+        if wrap_axis.upper() == "Y":
             device_units_per_mm = device_units_per_mm_y
         else:
             device_units_per_mm = device_units_per_mm_x
+
+        # The cutcode here is in device space. When the device view is a
+        # 90° rotation, the design's wrap axis maps to the *other* device
+        # axis, so the slice/crop axis must be flipped to compensate.
+        rotated_view = False
+        if view is not None:
+            try:
+                rotated_view = (
+                    view.matrix.value_scale_x() == 0
+                    and view.matrix.value_scale_y() == 0
+                )
+            except Exception:
+                rotated_view = False
+
+        # --- DEBUG: dump view orientation to the terminal ---
+        if view is not None:
+            try:
+                print(
+                    f"[rotary debug] view native_scale "
+                    f"X={view.native_scale_x:.6f} Y={view.native_scale_y:.6f}; "
+                    f"rotated_view={rotated_view}; matrix={view.matrix}"
+                )
+            except Exception as _e:
+                print(f"[rotary debug] view matrix dump failed: {_e}")
+        print(
+            f"[rotary debug] wrap_axis={wrap_axis!r} "
+            f"device_units/mm X={device_units_per_mm_x:.4f} "
+            f"Y={device_units_per_mm_y:.4f} steps_per_split={steps_per_split}"
+        )
+        _rotary_adv_mm = steps_per_split * circumference_mm / spr
+        print(
+            f"[rotary debug] rotary calibration: type={rtype} "
+            f"diameter={diameter_mm:.3f}mm circumference={circumference_mm:.3f}mm "
+            f"spr={spr}; split_size={split_size_mm:.4f}mm -> {steps_per_split} steps "
+            f"= {_rotary_adv_mm:.4f}mm of object surface advanced per slice"
+        )
 
         if self.channel:
             lens_size = getattr(device, "lens_size", "?")
             self.channel("=== Rotary Strip Debug ===")
             self.channel(f"  Device: {type(device).__name__}")
             self.channel(f"  Lens size: {lens_size}")
-            self.channel(f"  Scan axis: {scan_axis}")
+            self.channel(f"  Rotary (wrap) axis: {wrap_axis}")
             self.channel(f"  Reverse direction: {getattr(device, 'rotary_reverse_direction', False)}")
             self.channel(f"  Split size: {split_size_mm:.4f}mm")
             self.channel(f"  Overlap: {overlap_mm:.4f}mm")
@@ -858,7 +894,7 @@ class CutPlan:
             self.channel(f"  Steps/rotation: {spr}")
             self.channel(f"  Steps/split: {steps_per_split}")
             self.channel(f"  Device units/mm: X={device_units_per_mm_x:.4f}, Y={device_units_per_mm_y:.4f}")
-            self.channel(f"  Using axis {scan_axis}: {device_units_per_mm:.4f} dev units/mm")
+            self.channel(f"  Using axis {wrap_axis}: {device_units_per_mm:.4f} dev units/mm")
             self.channel(f"  Split in device units: {split_size_mm * device_units_per_mm:.2f}")
             if view is not None:
                 self.channel(f"  View native_scale: X={view.native_scale_x:.6f}, Y={view.native_scale_y:.6f}")
@@ -879,7 +915,7 @@ class CutPlan:
                 continue
             new_cutcode = self._split_cutcode_for_rotary(
                 item, split_size_mm, overlap_mm, steps_per_split,
-                scan_axis, device_units_per_mm
+                wrap_axis, device_units_per_mm, rotated_view
             )
             new_plan.append(new_cutcode)
         self.plan.clear()
@@ -887,31 +923,38 @@ class CutPlan:
 
     def _split_cutcode_for_rotary(
         self, cutcode, split_size_mm, overlap_mm, steps_per_split,
-        scan_axis, device_units_per_mm
+        wrap_axis, device_units_per_mm, rotated_view=False
     ):
         """
         Walk a CutCode and prepare it for dedicated-axis rotary engraving.
 
-        - RasterCuts are split into strips along the scan_axis with
+        - RasterCuts are split into strips along the wrap_axis with
           RotaryAdvanceCut between them. All strips are marked at the
           same position in the galvo field (the first strip's offset);
           the rotary motor handles the physical displacement.
         - Vector CutObjects use whole-shape assignment: each shape is
-          assigned to the slice containing its center along scan_axis,
+          assigned to the slice containing its center along wrap_axis,
           shapes are sorted by slice, and RotaryAdvanceCut is inserted
           between slices.
 
-        @param scan_axis: "X" or "Y" — the axis the rotary scrolls.
+        @param wrap_axis: "X" or "Y" — the design axis wrapped around
+            the object; the design is sliced along this axis.
         @param device_units_per_mm: conversion factor from mm to device
             coordinate units (accounts for the device's native scale).
         """
         from meerk40t.core.cutcode.rotaryadvancecut import RotaryAdvanceCut
 
         split_device = split_size_mm * device_units_per_mm
-        # scan_axis names the rotary's physical axis. If the rotary axis
-        # is X, the object scrolls through Y, so we split along Y (use_x=False).
-        # If the rotary axis is Y, the object scrolls through X, split along X.
-        use_x = scan_axis.upper() == "Y"
+        # wrap_axis names the design axis the design is sliced along.
+        # The cutcode here is already in device space, so when the device
+        # view is a 90° rotation the slice axis maps to the other device
+        # axis. use_x is the resulting device/image axis to crop along.
+        design_split_x = wrap_axis.upper() == "X"
+        use_x = design_split_x != rotated_view
+        print(
+            f"[rotary debug] wrap_axis={wrap_axis!r} design_split_x={design_split_x} "
+            f"rotated_view={rotated_view} -> crop use_x={use_x}"
+        )
 
         # First pass: separate rasters and vectors, recording each item's
         # slice assignment.  Items are (slice_index, sequence_of_cuts).
@@ -1043,12 +1086,42 @@ class CutPlan:
         split_px = int(round(abs(split_device / step)))
         overlap_px = int(round(abs(overlap_device / step)))
 
+        # --- DEBUG: dump strip images to PNG for investigation ---
+        import glob
+        import os
+
+        _dbg_dir = os.path.join(os.getcwd(), "rotary_debug")
+        os.makedirs(_dbg_dir, exist_ok=True)
+        for _old in glob.glob(os.path.join(_dbg_dir, "strip_*.png")) + glob.glob(
+            os.path.join(_dbg_dir, "_source_*.png")
+        ):
+            try:
+                os.remove(_old)
+            except OSError:
+                pass
+        try:
+            image.save(os.path.join(_dbg_dir, f"_source_{width_px}x{height_px}.png"))
+        except Exception as _e:
+            print(f"[rotary debug] could not write source image: {_e}")
+        _strip_adv_mm = split_px * abs(step) / device_units_per_mm
+        _strip_draw_mm = (split_px + overlap_px) * abs(step) / device_units_per_mm
+        print(
+            f"[rotary debug] _split_raster use_x={use_x} "
+            f"(crop image along {'X' if use_x else 'Y'}); "
+            f"source image {width_px}x{height_px}px "
+            f"step_x={raster_cut.step_x:.4f} step_y={raster_cut.step_y:.4f} "
+            f"source_horizontal={raster_cut.horizontal} strip_horizontal={use_x} "
+            f"split_px={split_px} overlap_px={overlap_px}; "
+            f"each strip advances {_strip_adv_mm:.4f}mm, drawn {_strip_draw_mm:.4f}mm wide; "
+            f"dir={_dbg_dir}"
+        )
+
         if channel:
             channel("  --- Raster Split ---")
             channel(f"    Image size: {width_px}x{height_px} px")
             channel(f"    step_x={raster_cut.step_x:.6f}, step_y={raster_cut.step_y:.6f}")
             channel(f"    offset_x={raster_cut.offset_x:.2f}, offset_y={raster_cut.offset_y:.2f}")
-            channel(f"    horizontal={raster_cut.horizontal} (override to {not use_x}), bidirectional={raster_cut.bidirectional}")
+            channel(f"    horizontal={raster_cut.horizontal}, bidirectional={raster_cut.bidirectional}")
             channel(f"    start_min_x={raster_cut.start_minimum_x}, start_min_y={raster_cut.start_minimum_y}")
             channel(f"    inverted={raster_cut.inverted}, overscan={raster_cut.scan}")
             channel(f"    Split axis: {'X' if use_x else 'Y'}")
@@ -1069,6 +1142,10 @@ class CutPlan:
             channel(f"    Expected strips: {num_strips}")
 
         if split_px <= 0 or split_px >= extent_px:
+            print(
+                f"[rotary debug] NOT splitting (split_px={split_px}, "
+                f"extent_px={extent_px}) -> returning raster unchanged"
+            )
             return [raster_cut]
 
         strips = []
@@ -1082,18 +1159,25 @@ class CutPlan:
                 crop_box = (0, pos, width_px, pos_end)
             strip_image = image.crop(crop_box)
 
+            try:
+                strip_image.save(
+                    os.path.join(
+                        _dbg_dir,
+                        f"strip_{len(strips):03d}_"
+                        f"{strip_image.width}x{strip_image.height}.png",
+                    )
+                )
+            except Exception as _e:
+                print(f"[rotary debug] could not write strip {len(strips)}: {_e}")
+
             # All strips are placed at the same galvo field position.
             # The rotary advances the object between strips.
             #
-            # Force scan direction perpendicular to the split axis so
-            # scan lines run along the long side of each strip (matching
-            # LightBurn: rotary axis X → scan horizontal, Y → vertical).
-            # use_x means we're splitting along X (object scrolls through
-            # X), so the strip is tall/narrow → scan vertically.
-            # Not use_x means splitting along Y → strip is wide/short
-            # → scan horizontally.
-            strip_horizontal = not use_x
-
+            # Force one consistent scan direction for every strip. The
+            # source rasters may carry differing `horizontal` values
+            # (multiple images, crossover passes, etc.), but within a
+            # rotary job every slice must mark the same way. use_x is the
+            # device axis the strip is narrow along.
             strip = RasterCut(
                 image=strip_image,
                 offset_x=raster_cut.offset_x,
@@ -1102,7 +1186,7 @@ class CutPlan:
                 step_y=raster_cut.step_y,
                 inverted=raster_cut.inverted,
                 bidirectional=raster_cut.bidirectional,
-                horizontal=strip_horizontal,
+                horizontal=use_x,
                 start_minimum_y=raster_cut.start_minimum_y,
                 start_minimum_x=raster_cut.start_minimum_x,
                 overscan=raster_cut.scan,
@@ -1114,6 +1198,7 @@ class CutPlan:
             )
             strips.append(strip)
             pos += split_px  # Advance by split_px (not split+overlap)
+        print(f"[rotary debug] wrote {len(strips)} strip PNG(s) to {_dbg_dir}")
         return strips
 
     def combine_effects(self):
