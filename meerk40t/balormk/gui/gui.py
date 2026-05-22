@@ -24,12 +24,15 @@ def plugin(service, lifecycle):
         from .balorconfig import BalorConfiguration
         from .balorcontroller import BalorController
         from .baloroperationproperties import BalorOperationPanel
+        from .cor_wizard import CorWizard
 
         service.register("window/Controller", BalorController)
         service.register("window/Configuration", BalorConfiguration)
+        service.register("window/CorWizard", CorWizard)
 
         service.register("winpath/Controller", service)
         service.register("winpath/Configuration", service)
+        service.register("winpath/CorWizard", service)
 
         _ = service.kernel.translation
 
@@ -171,10 +174,6 @@ def plugin(service, lifecycle):
                 "rule_enabled": lambda cond: bool(service.elements.has_emphasis()),
             },
         )
-
-        from .corscene import register_scene
-
-        register_scene(service)
 
         service.add_service_delegate(BalorGui(service))
 

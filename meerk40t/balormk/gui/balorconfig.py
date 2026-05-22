@@ -29,7 +29,7 @@ class BalorConfiguration(MWindow):
         self.SetIcon(_icon)
         self.SetTitle(_("Balor-Configuration"))
         self._test_pin = False
-        self._define_cor = False
+        self._cor_wizard = False
         self.notebook_main = wx.aui.AuiNotebook(
             self,
             -1,
@@ -56,7 +56,6 @@ class BalorConfiguration(MWindow):
             ("balor-extra", _("Extras")),
             ("balor-effects", _("Effects")),
             ("balor-defaults", _("Operation Defaults")),
-            #            ("balor-corfile", _("Correction")),
         )
         self.test_bits = ""
         injector = (
@@ -85,17 +84,16 @@ class BalorConfiguration(MWindow):
                 # Hint for translation _("Pin-Index")
                 "subsection": "_30_Pin-Index",
             },
-        )
-        injector_cor = (
             {
-                "attr": "define_cor",
+                "attr": "cor_wizard",
                 "object": self,
                 "default": False,
                 "type": bool,
                 "style": "button",
-                "label": _("Define"),
-                "tip": _("Open a definition screen"),
-                "section": _("Correction-Values"),
+                "label": _("Generate…"),
+                "tip": _("Open the correction file generator wizard"),
+                "section": "_00_General",
+                "subsection": "Correction File",
             },
         )
         self.panels = []
@@ -106,8 +104,6 @@ class BalorConfiguration(MWindow):
             if addpanel:
                 if item[0] == "balor":
                     injection = injector
-                elif item[0] == "balor-corfile":
-                    injection = injector_cor
                 else:
                     injection = None
                 newpanel = ChoicePropertyPanel(
@@ -160,14 +156,17 @@ class BalorConfiguration(MWindow):
             self.context("red off\n")
 
     @property
-    def define_cor(self):
-        return self._define_cor
+    def cor_wizard(self):
+        return self._cor_wizard
 
-    @define_cor.setter
-    def define_cor(self, value):
-        self._define_cor = value
-        if self._define_cor:
-            self.context("widget_corfile\n")
+    @cor_wizard.setter
+    def cor_wizard(self, value):
+        # Button-style choices only call setattr when the new value differs
+        # from the cached one. Reset to False so the next click is always
+        # detected as a transition False → True and fires the wizard.
+        if value:
+            self.context("window toggle CorWizard\n")
+        self._cor_wizard = False
 
     def update_bit_info(self, *args):
         if not self.context.driver.connected:

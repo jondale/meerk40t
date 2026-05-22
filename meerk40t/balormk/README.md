@@ -48,7 +48,7 @@ The BalorMK module provides comprehensive support for JCZ Technologies galvo las
 - **`balorconfig.py`** - Device configuration interface
 - **`balorcontroller.py`** - Controller status and monitoring panels
 - **`baloroperationproperties.py`** - Operation-specific property panels
-- **`corscene.py`** - Coordinate system visualization
+- **`cor_wizard.py`** - 9-point lens-correction file generator wizard
 
 ## Hardware Support
 
