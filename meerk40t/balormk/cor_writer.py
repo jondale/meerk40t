@@ -162,22 +162,24 @@ def generate_table_from_9_point(
         return float(measured_mm) - nominal
 
     # Walk horizontally from center along each row of the 3x3.
+    # A segment measured longer than nominal means the galvo overshoots —
+    # the correction must pull the endpoint inward (negate the error).
     for aj in (-1, 0, 1):
         # Right half: 0 -> +1
         m = measurements.get((1, aj), (nominal, nominal))[0]
-        anchor_offsets[(1, aj)][0] = seg_error_mm(m) * units_per_mm
+        anchor_offsets[(1, aj)][0] = -seg_error_mm(m) * units_per_mm
         # Left half: 0 -> -1
         m = measurements.get((-1, aj), (nominal, nominal))[0]
-        anchor_offsets[(-1, aj)][0] = -seg_error_mm(m) * units_per_mm
+        anchor_offsets[(-1, aj)][0] = seg_error_mm(m) * units_per_mm
 
     # Walk vertically from center along each column of the 3x3.
     for ai in (-1, 0, 1):
         # Top half: 0 -> +1
         m = measurements.get((ai, 1), (nominal, nominal))[1]
-        anchor_offsets[(ai, 1)][1] = seg_error_mm(m) * units_per_mm
+        anchor_offsets[(ai, 1)][1] = -seg_error_mm(m) * units_per_mm
         # Bottom half: 0 -> -1
         m = measurements.get((ai, -1), (nominal, nominal))[1]
-        anchor_offsets[(ai, -1)][1] = -seg_error_mm(m) * units_per_mm
+        anchor_offsets[(ai, -1)][1] = seg_error_mm(m) * units_per_mm
 
     # Pack into 3x3 lists indexed [row][col] (row = aj+1, col = ai+1).
     anchor_dx = [[0.0] * 3 for _ in range(3)]
