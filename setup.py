@@ -5,6 +5,7 @@ setup(
         "pyusb>=1.0.0",
         "pyserial",
         "numpy",
+        "PyYAML>=5.1",
     ],
     extras_require={
         "all": [

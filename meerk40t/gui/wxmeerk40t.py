@@ -52,6 +52,7 @@ from .imagesplitter import RenderSplit
 from .keymap import Keymap
 from .lasertoolpanel import LaserTool
 from .materialmanager import MaterialManager
+from .materiallibrary import MaterialLibraryWindow
 from .materialtest import TemplateTool
 from .notes import Notes
 from .operation_info import OperationInformation
@@ -1124,6 +1125,7 @@ class wxMeerK40t(wx.App, Module):
         kernel.register("window/Keymap", Keymap)
         kernel.register("window/Wordlist", WordlistEditor)
         kernel.register("window/MatManager", MaterialManager)
+        kernel.register("window/MaterialLibrary", MaterialLibraryWindow)
         kernel.register("window/Navigation", Navigation)
         kernel.register("window/Notes", Notes)
         kernel.register("window/AutoExec", AutoExec)

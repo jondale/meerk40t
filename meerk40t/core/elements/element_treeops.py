@@ -2339,6 +2339,103 @@ def init_tree(kernel):
             not self.update_statusbar_on_material_load
         )
 
+    # --- Library (matlib) "Load" menu ----------------------------------
+    # Mirrors the Materials menu above but sources entries from the matlib
+    # service's libraries, filtered by the active device's driver.
+
+    def _active_driver_key():
+        try:
+            active = kernel.services("device", active=True)
+            if active is None:
+                return ""
+            rp = getattr(active, "registered_path", "") or ""
+            if rp.startswith("provider/device/"):
+                return rp.split("/")[-1]
+        except Exception:
+            pass
+        return ""
+
+    def _library_entries():
+        """Return list of (submenu_path, identifier) tuples for the
+        Library menu. ``identifier`` is JSON-encoded and consumed by
+        ``matlib.apply_library_to_document``."""
+        import json as _json
+        matlib = getattr(kernel, "matlib", None)
+        if matlib is None:
+            return []
+        active_driver = _active_driver_key()
+        entries = []
+
+        def _walk(lib_name, ancestors, cat):
+            new_ancestors = ancestors + [cat]
+            for sub in cat.categories:
+                _walk(lib_name, new_ancestors, sub)
+            cat_menu_path = "|".join(c.name for c in new_ancestors)
+            cat_id_path = ">".join(c.name for c in new_ancestors)
+            for mat in cat.materials:
+                if mat.thicknesses:
+                    # Material has thicknesses → drill one more level so
+                    # thicknesses are the clickable leaves.
+                    menu_path = (
+                        f"Library|{lib_name}|{cat_menu_path}|{mat.name}"
+                    )
+                    for thk in mat.thicknesses:
+                        ident = _json.dumps([
+                            lib_name, cat_id_path, mat.name, thk.value,
+                        ])
+                        entries.append((menu_path, ident))
+                else:
+                    # No thicknesses → the material itself is the leaf;
+                    # menu stops at the category level.
+                    menu_path = f"Library|{lib_name}|{cat_menu_path}"
+                    ident = _json.dumps([
+                        lib_name, cat_id_path, mat.name, "",
+                    ])
+                    entries.append((menu_path, ident))
+
+        for lib in matlib.libraries():
+            # When the library declares a driver, only show it when the
+            # active device matches. Libraries with no driver match anything.
+            if (
+                lib.driver
+                and active_driver
+                and lib.driver != active_driver
+            ):
+                continue
+            for cat in lib.categories:
+                _walk(lib.name, [], cat)
+        return entries
+
+    def library_menus():
+        return [e[0] for e in _library_entries()]
+
+    def library_ids():
+        return [e[1] for e in _library_entries()]
+
+    def library_label(libid):
+        """Leaf-label for the action: thickness when present, else material."""
+        import json as _json
+        try:
+            _lib, _cat, mat, thk = _json.loads(libid)
+        except Exception:
+            return libid
+        return thk if thk else mat
+
+    @tree_values("libid", values=library_ids)
+    @tree_submenu_list(library_menus)
+    @tree_calc("liblabel", lambda libid: library_label(libid))
+    @tree_operation(
+        "{liblabel}",
+        node_type="branch ops",
+        help=_("Replace the document operations with a library entry"),
+        grouping="OPS_60_MATMAN",
+    )
+    def load_library_entry(node, libid, **kwargs):
+        matlib = getattr(kernel, "matlib", None)
+        if matlib is None:
+            return
+        matlib.apply_library_to_document(libid, self)
+
     @tree_submenu(_("Add effect"))
     @tree_operation(
         _("Add hatch effect"),

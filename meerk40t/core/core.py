@@ -32,6 +32,10 @@ def plugin(kernel, lifecycle=None):
 
         plugins.append(penbox.plugin)
 
+        from .elements import material_library
+
+        plugins.append(material_library.plugin)
+
         from . import logging
 
         plugins.append(logging.plugin)
