@@ -8768,7 +8768,11 @@ def _open_image_ignoring_large_png_text(pil_image, source):
     try:
         return pil_image.open(open_source)
     except ValueError as e:
-        if "PngImagePlugin.MAX_TEXT_CHUNK" not in str(e):
+        message = str(e)
+        if (
+            "PngImagePlugin.MAX_TEXT_CHUNK" not in message
+            and "Decompressed Data Too Large" not in message
+        ):
             raise
         png_data = _source_png_data(source)
         if png_data is None:
